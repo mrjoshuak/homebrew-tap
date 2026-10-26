@@ -37,8 +37,17 @@ jobs:
         id: install
         continue-on-error: true
         run: |
-          set -o pipefail
-          brew install mrjoshuak/tap/c4 2>&1 | tee walk/01-install.txt
+          set +e
+          brew install mrjoshuak/tap/c4 > walk/01-install.txt 2>&1
+          code=$?
+          cat walk/01-install.txt
+          if [ "$code" -ne 0 ]; then
+            echo "install failed ($code); retrying once with --verbose for the record"
+            brew install --verbose mrjoshuak/tap/c4 > walk/01b-install-verbose.txt 2>&1
+            code=$?
+            tail -60 walk/01b-install-verbose.txt
+          fi
+          exit "$code"
 
       - name: c4 version
         id: version
@@ -160,7 +169,9 @@ jobs:
           cat walk/21-install-over-old.txt; echo "exit $code" | tee -a walk/21-install-over-old.txt
           test "$code" -ne 0 && grep -qiE "conflict|already exists|could not symlink" walk/21-install-over-old.txt || exit 1
           brew uninstall c4-farm c4-agent 2>&1 | tee walk/22-uninstall-old.txt
+          # the failed install left c4 in the Cellar unlinked; a user who did it in this order needs the link
           brew install mrjoshuak/tap/c4 2>&1 | tee walk/23-install-after.txt
+          brew link --overwrite mrjoshuak/tap/c4 2>&1 | tee -a walk/23-install-after.txt
           c4 version 2>&1 | tee -a walk/23-install-after.txt && c4-farm help >/dev/null 2>&1 && echo "c4-farm help ok" | tee -a walk/23-install-after.txt
 
       - name: Keep the walk's output
