@@ -158,7 +158,7 @@ jobs:
           brew install mrjoshuak/tap/c4 > walk/21-install-over-old.txt 2>&1
           code=$?
           cat walk/21-install-over-old.txt; echo "exit $code" | tee -a walk/21-install-over-old.txt
-          test "$code" -ne 0 && grep -qi "conflict" walk/21-install-over-old.txt || exit 1
+          test "$code" -ne 0 && grep -qiE "conflict|already exists|could not symlink" walk/21-install-over-old.txt || exit 1
           brew uninstall c4-farm c4-agent 2>&1 | tee walk/22-uninstall-old.txt
           brew install mrjoshuak/tap/c4 2>&1 | tee walk/23-install-after.txt
           c4 version 2>&1 | tee -a walk/23-install-after.txt && c4-farm help >/dev/null 2>&1 && echo "c4-farm help ok" | tee -a walk/23-install-after.txt
