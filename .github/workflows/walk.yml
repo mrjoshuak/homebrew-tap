@@ -128,6 +128,10 @@ jobs:
             kubectl -n c4-system logs "$dep" --all-containers --tail=300 2>&1 | tee "$d/logs-$n.txt" || true
             kubectl -n c4-system logs "$dep" --all-containers --previous --tail=300 2>&1 | tee "$d/logs-$n-previous.txt" || true
           done
+          for p in $(kubectl -n c4-system get pods -o name 2>/dev/null | grep c4-manager); do
+            n=${p#pod/}
+            { echo "== $p"; kubectl -n c4-system logs "$p" --all-containers --tail=200; echo "== $p (previous)"; kubectl -n c4-system logs "$p" --all-containers --previous --tail=200; } 2>&1 | tee "$d/pod-$n.txt" || true
+          done
           kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -80 | tee "$d/events.txt" || true
           for url in http://127.0.0.1:30080/healthz http://127.0.0.1:30080/ http://127.0.0.1:30080/snapshot; do
             printf '%s -> ' "$url"; curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 "$url" || echo "no answer"
