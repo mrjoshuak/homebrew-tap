@@ -110,6 +110,20 @@ jobs:
           c4 farm status 2>&1 | tee walk/08-farm-status.txt
           c4 farm down 2>&1 | tee walk/09-farm-down.txt
 
+      - name: Farm diagnostics when farm up failed (ubuntu)
+        if: runner.os == 'Linux' && steps.farm.outcome == 'failure'
+        run: |
+          brew install kubernetes-cli 2>&1 | tail -1 || true
+          ctx=$(kubectl config current-context 2>/dev/null || true)
+          echo "context: $ctx" | tee walk/10-diag-context.txt
+          kubectl get nodes -o wide 2>&1 | tee walk/10-diag-nodes.txt || true
+          kubectl get pods -A -o wide 2>&1 | tee walk/11-diag-pods.txt || true
+          kubectl describe pods -n c4-system 2>&1 | tee walk/12-diag-describe-c4-system.txt || true
+          kubectl logs -n c4-system deploy/c4-operator-manager --all-containers --tail=300 2>&1 | tee walk/13-diag-operator-logs.txt || true
+          kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -80 | tee walk/14-diag-events.txt || true
+          docker ps -a 2>&1 | tee walk/15-diag-docker.txt || true
+          nproc 2>&1 | tee walk/16-diag-cpu.txt; free -m 2>&1 | tee -a walk/16-diag-cpu.txt || true
+
       - name: Keep the walk's output
         if: always()
         uses: actions/upload-artifact@v4
