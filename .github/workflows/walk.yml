@@ -96,7 +96,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          brew install kind 2>&1 | tee walk/06-kind.txt
+          brew install kind kubernetes-cli 2>&1 | tee walk/06-kind.txt
           kind version 2>&1 | tee -a walk/06-kind.txt
 
       - name: c4 farm up, status, down (ubuntu)
@@ -113,16 +113,51 @@ jobs:
       - name: Farm diagnostics when farm up failed (ubuntu)
         if: runner.os == 'Linux' && steps.farm.outcome == 'failure'
         run: |
-          brew install kubernetes-cli 2>&1 | tail -1 || true
-          ctx=$(kubectl config current-context 2>/dev/null || true)
-          echo "context: $ctx" | tee walk/10-diag-context.txt
-          kubectl get nodes -o wide 2>&1 | tee walk/10-diag-nodes.txt || true
-          kubectl get pods -A -o wide 2>&1 | tee walk/11-diag-pods.txt || true
-          kubectl describe pods -n c4-system 2>&1 | tee walk/12-diag-describe-c4-system.txt || true
-          kubectl logs -n c4-system deploy/c4-operator-manager --all-containers --tail=300 2>&1 | tee walk/13-diag-operator-logs.txt || true
-          kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -80 | tee walk/14-diag-events.txt || true
-          docker ps -a 2>&1 | tee walk/15-diag-docker.txt || true
-          nproc 2>&1 | tee walk/16-diag-cpu.txt; free -m 2>&1 | tee -a walk/16-diag-cpu.txt || true
+          d=walk/diag; mkdir -p "$d"
+          echo "context: $(kubectl config current-context 2>/dev/null)" | tee "$d/context.txt"
+          { nproc; free -m; df -h / ; } 2>&1 | tee "$d/runner.txt" || true
+          docker ps -a 2>&1 | tee "$d/docker-ps.txt" || true
+          kubectl get nodes -o wide 2>&1 | tee "$d/nodes.txt" || true
+          kubectl get pods -A -o wide 2>&1 | tee "$d/pods.txt" || true
+          kubectl -n c4-system get deploy,rs -o wide 2>&1 | tee "$d/deploy-rs.txt" || true
+          kubectl -n c4-system rollout status deploy/c4-manager --timeout=15s 2>&1 | tee "$d/rollout-manager.txt" || true
+          kubectl -n c4-system get deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .spec.template.spec.containers[*]}  {.name}: {.args}{"\n"}{end}{end}' 2>&1 | tee "$d/manager-args.txt" || true
+          kubectl describe pods -n c4-system 2>&1 | tee "$d/describe-c4-system.txt" || true
+          for dep in $(kubectl -n c4-system get deploy -o name 2>/dev/null); do
+            n=${dep#deployment.apps/}
+            kubectl -n c4-system logs "$dep" --all-containers --tail=300 2>&1 | tee "$d/logs-$n.txt" || true
+            kubectl -n c4-system logs "$dep" --all-containers --previous --tail=300 2>&1 | tee "$d/logs-$n-previous.txt" || true
+          done
+          kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -80 | tee "$d/events.txt" || true
+          for url in http://127.0.0.1:30080/healthz http://127.0.0.1:30080/ http://127.0.0.1:30080/snapshot; do
+            printf '%s -> ' "$url"; curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 "$url" || echo "no answer"
+          done 2>&1 | tee "$d/hud-curl.txt"
+          # the installer token: compare the file's and the Secret's digests, never the token
+          tok=$(ls ~/.c4/farms/*/token ~/.config/c4/farms/*/token 2>/dev/null | head -1)
+          if [ -n "$tok" ]; then
+            f=$(sha256sum "$tok" | cut -c1-16)
+            s=$(kubectl -n c4-system get secret -o json 2>/dev/null | python3 -c 'import json,sys,base64,hashlib; d=json.load(sys.stdin); [print(i["metadata"]["name"], hashlib.sha256(base64.b64decode(v)).hexdigest()[:16]) for i in d["items"] for k,v in (i.get("data") or {}).items() if "token" in k]' 2>/dev/null)
+            echo "token file sha256 (16): $f"; echo "secrets:"; echo "$s"
+            echo "$s" | grep -q "$f" && echo "same" || echo "differ"
+          else
+            echo "no token file found under ~/.c4/farms or ~/.config/c4/farms"
+          fi 2>&1 | tee "$d/token-compare.txt"
+          kind export logs --name c4-local "$d/kind-logs" 2>&1 | tail -2 || true
+
+      - name: Upgrade path, old formulas first (expects the conflict explained, then success)
+        id: upgrade
+        continue-on-error: true
+        run: |
+          set +e
+          brew uninstall --ignore-dependencies c4 2>&1 | tail -1
+          brew install mrjoshuak/tap/c4-farm mrjoshuak/tap/c4-agent 2>&1 | tee walk/20-old-formulas.txt
+          brew install mrjoshuak/tap/c4 > walk/21-install-over-old.txt 2>&1
+          code=$?
+          cat walk/21-install-over-old.txt; echo "exit $code" | tee -a walk/21-install-over-old.txt
+          test "$code" -ne 0 && grep -qi "conflict" walk/21-install-over-old.txt || exit 1
+          brew uninstall c4-farm c4-agent 2>&1 | tee walk/22-uninstall-old.txt
+          brew install mrjoshuak/tap/c4 2>&1 | tee walk/23-install-after.txt
+          c4 version 2>&1 | tee -a walk/23-install-after.txt && c4-farm help >/dev/null 2>&1 && echo "c4-farm help ok" | tee -a walk/23-install-after.txt
 
       - name: Keep the walk's output
         if: always()
@@ -135,7 +170,7 @@ jobs:
         if: always()
         run: |
           failed=""
-          for s in install:${{ steps.install.outcome }} version:${{ steps.version.outcome }} help:${{ steps.help.outcome }} agents-without:${{ steps.agents-without.outcome }} claude:${{ steps.claude.outcome }} agents:${{ steps.agents.outcome }} samples:${{ steps.samples.outcome }} kind:${{ steps.kind.outcome }} farm:${{ steps.farm.outcome }}; do
+          for s in install:${{ steps.install.outcome }} version:${{ steps.version.outcome }} help:${{ steps.help.outcome }} agents-without:${{ steps.agents-without.outcome }} claude:${{ steps.claude.outcome }} agents:${{ steps.agents.outcome }} samples:${{ steps.samples.outcome }} kind:${{ steps.kind.outcome }} farm:${{ steps.farm.outcome }} upgrade:${{ steps.upgrade.outcome }}; do
             echo "$s"
             case "$s" in *:failure) failed="$failed ${s%%:*}";; esac
           done
