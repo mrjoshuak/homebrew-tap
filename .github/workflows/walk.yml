@@ -1,0 +1,77 @@
+name: walk
+
+# The clean-machine walk: on GitHub's fresh runners (Homebrew preinstalled
+# on both), install the suite from this tap the way a new user does and
+# run the first commands. Every step's output is kept as an artifact so
+# the walk can be read against the first-run guide. Dispatch by hand.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  walk:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+    steps:
+      - name: Record the runner
+        run: |
+          mkdir -p walk
+          { uname -a; brew --version; } 2>&1 | tee walk/00-runner.txt
+
+      - name: brew install mrjoshuak/tap/c4
+        run: |
+          set -o pipefail
+          brew install mrjoshuak/tap/c4 2>&1 | tee walk/01-install.txt
+
+      - name: c4 version
+        run: |
+          set -o pipefail
+          c4 version 2>&1 | tee walk/02-version.txt
+          grep -q '1.0.20' walk/02-version.txt
+
+      - name: c4 help lists farm
+        run: |
+          set -o pipefail
+          c4 help 2>&1 | tee walk/03-help.txt
+          grep -q 'c4 farm' walk/03-help.txt
+
+      - name: c4 farm agents
+        run: |
+          set -o pipefail
+          c4 farm agents 2>&1 | tee walk/04-farm-agents.txt
+
+      - name: c4 farm samples get
+        run: |
+          set -o pipefail
+          c4 farm samples get 2>&1 | tee walk/05-samples-get.txt
+          ls -la ~/c4-samples 2>&1 | tee -a walk/05-samples-get.txt
+
+      - name: Install kind (ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          set -o pipefail
+          brew install kind 2>&1 | tee walk/06-kind.txt
+          kind version 2>&1 | tee -a walk/06-kind.txt
+
+      - name: c4 farm up, status, down (ubuntu)
+        if: runner.os == 'Linux'
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          c4 farm up 2>&1 | tee walk/07-farm-up.txt
+          c4 farm status 2>&1 | tee walk/08-farm-status.txt
+          c4 farm down 2>&1 | tee walk/09-farm-down.txt
+
+      - name: Keep the walk's output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: walk-${{ matrix.os }}
+          path: walk/
