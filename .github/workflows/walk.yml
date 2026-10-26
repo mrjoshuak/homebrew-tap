@@ -2,8 +2,9 @@ name: walk
 
 # The clean-machine walk: on GitHub's fresh runners (Homebrew preinstalled
 # on both), install the suite from this tap the way a new user does and
-# run the first commands. Every step's output is kept as an artifact so
-# the walk can be read against the first-run guide. Dispatch by hand.
+# run the first commands. Every step runs even after a failure, each
+# step's output is kept as an artifact, and the last step fails the job
+# if any step did, so one run shows everything. Dispatch by hand.
 
 on:
   workflow_dispatch:
@@ -20,48 +21,88 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
       HOMEBREW_NO_ENV_HINTS: "1"
     steps:
+      - name: Put Linuxbrew on PATH (ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+          echo /home/linuxbrew/.linuxbrew/sbin >> "$GITHUB_PATH"
+
       - name: Record the runner
         run: |
           mkdir -p walk
-          { uname -a; brew --version; } 2>&1 | tee walk/00-runner.txt
+          { uname -a; brew --version; node --version; } 2>&1 | tee walk/00-runner.txt
 
       - name: brew install mrjoshuak/tap/c4
+        id: install
+        continue-on-error: true
         run: |
           set -o pipefail
           brew install mrjoshuak/tap/c4 2>&1 | tee walk/01-install.txt
 
       - name: c4 version
+        id: version
+        continue-on-error: true
         run: |
           set -o pipefail
           c4 version 2>&1 | tee walk/02-version.txt
           grep -q '1.0.20' walk/02-version.txt
 
       - name: c4 help lists farm
+        id: help
+        continue-on-error: true
         run: |
           set -o pipefail
           c4 help 2>&1 | tee walk/03-help.txt
           grep -q 'c4 farm' walk/03-help.txt
 
-      - name: c4 farm agents
+      - name: c4 farm agents without Claude Code (expects the sentence, non-zero exit)
+        id: agents-without
+        continue-on-error: true
+        run: |
+          set +e
+          c4 farm agents > walk/04a-farm-agents-no-claude.txt 2>&1
+          code=$?
+          cat walk/04a-farm-agents-no-claude.txt
+          echo "exit $code" | tee -a walk/04a-farm-agents-no-claude.txt
+          test "$code" -ne 0 && grep -q "Claude Code" walk/04a-farm-agents-no-claude.txt
+
+      - name: Install Claude Code
+        id: claude
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm install -g @anthropic-ai/claude-code 2>&1 | tail -3 | tee walk/04b-claude-install.txt
+          claude --version 2>&1 | tee -a walk/04b-claude-install.txt
+
+      - name: c4 farm agents with Claude Code, no sessions (expects exit 0)
+        id: agents
+        continue-on-error: true
         run: |
           set -o pipefail
           c4 farm agents 2>&1 | tee walk/04-farm-agents.txt
 
       - name: c4 farm samples get
+        id: samples
+        continue-on-error: true
         run: |
           set -o pipefail
           c4 farm samples get 2>&1 | tee walk/05-samples-get.txt
           ls -la ~/c4-samples 2>&1 | tee -a walk/05-samples-get.txt
 
       - name: Install kind (ubuntu)
+        id: kind
         if: runner.os == 'Linux'
+        continue-on-error: true
         run: |
           set -o pipefail
           brew install kind 2>&1 | tee walk/06-kind.txt
           kind version 2>&1 | tee -a walk/06-kind.txt
 
       - name: c4 farm up, status, down (ubuntu)
+        id: farm
         if: runner.os == 'Linux'
+        continue-on-error: true
         timeout-minutes: 25
         run: |
           set -o pipefail
@@ -75,3 +116,14 @@ jobs:
         with:
           name: walk-${{ matrix.os }}
           path: walk/
+
+      - name: Verdict
+        if: always()
+        run: |
+          failed=""
+          for s in install:${{ steps.install.outcome }} version:${{ steps.version.outcome }} help:${{ steps.help.outcome }} agents-without:${{ steps.agents-without.outcome }} claude:${{ steps.claude.outcome }} agents:${{ steps.agents.outcome }} samples:${{ steps.samples.outcome }} kind:${{ steps.kind.outcome }} farm:${{ steps.farm.outcome }}; do
+            echo "$s"
+            case "$s" in *:failure) failed="$failed ${s%%:*}";; esac
+          done
+          if [ -n "$failed" ]; then echo "failed steps:$failed"; exit 1; fi
+          echo "every step passed"
