@@ -55,7 +55,7 @@ jobs:
         run: |
           set -o pipefail
           c4 version 2>&1 | tee walk/02-version.txt
-          grep -q '1.0.20' walk/02-version.txt
+          want=$(sed -n 's/^  version "\(.*\)"/\1/p' Formula/c4.rb); echo "formula version $want"; grep -q "$want" walk/02-version.txt
 
       - name: c4 help lists farm
         id: help
