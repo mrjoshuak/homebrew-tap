@@ -33,6 +33,18 @@ jobs:
           mkdir -p walk
           { uname -a; brew --version; node --version; } 2>&1 | tee walk/00-runner.txt
 
+      - name: Tap the branch this walk was dispatched on
+        # A walk dispatched on a branch installs that branch's formulas, so
+        # a formula is walked on fresh runners before it becomes the tap's
+        # default. On main this does nothing: brew taps main as a user would.
+        if: github.ref_name != 'main'
+        run: |
+          brew tap mrjoshuak/tap
+          tap="$(brew --repository mrjoshuak/tap)"
+          git -C "$tap" fetch origin "${{ github.ref_name }}"
+          git -C "$tap" checkout -q FETCH_HEAD
+          git -C "$tap" log --oneline -1 | tee walk/00b-tap-ref.txt
+
       - name: brew install mrjoshuak/tap/c4
         id: install
         continue-on-error: true
